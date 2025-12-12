@@ -362,7 +362,7 @@ def main(page: ft.Page):
     
     # ウィンドウサイズを固定
     page.window.width = 1230
-    page.window.height = 680
+    page.window.height = 500
     page.window.resizable = False
     page.window.minimizable = True
     page.window.maximizable = False
