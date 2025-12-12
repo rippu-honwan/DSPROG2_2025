@@ -1,26 +1,24 @@
 import flet as ft
+from calc import CalculatorApp
 
 
 def main(page: ft.Page):
-    counter = ft.Text("0", size=50, data=0)
-
-    def increment_click(e):
-        counter.data += 1
-        counter.value = str(counter.data)
-        counter.update()
-
-    page.floating_action_button = ft.FloatingActionButton(
-        icon=ft.Icons.ADD, on_click=increment_click
-    )
-    page.add(
-        ft.SafeArea(
-            ft.Container(
-                counter,
-                alignment=ft.alignment.center,
-            ),
-            expand=True,
-        )
-    )
+    """メイン関数"""
+    page.title = "科学計算機"
+    page.bgcolor = ft.Colors.BLACK
+    page.padding = 0
+    page.spacing = 0
+    
+    # ウィンドウサイズを固定（調整不可）
+    page.window.width = 1230
+    page.window.height = 500
+    page.window.resizable = False  # サイズ変更禁止
+    page.window.minimizable = True  # 最小化許可
+    page.window.maximizable = False  # 最大化禁止
+    
+    calc = CalculatorApp()
+    page.add(calc)
 
 
-ft.app(main)
+if __name__ == "__main__":
+    ft.app(target=main)
