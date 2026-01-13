@@ -15,7 +15,7 @@ class WeatherDatabase:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # 1. 地區表
+        # 1. 地域情報テーブル
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS areas (
                 area_code TEXT PRIMARY KEY,
@@ -26,7 +26,7 @@ class WeatherDatabase:
             )
         """)
         
-        # 2. 預報主表
+        # 2. 予報情報テーブル
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS forecasts (
                 forecast_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,7 +37,7 @@ class WeatherDatabase:
             )
         """)
         
-        # 3. 預報詳情表
+        # 3. 予報詳細テーブル
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS forecast_details (
                 detail_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,7 +52,7 @@ class WeatherDatabase:
             )
         """)
         
-        # 建立索引
+        # インデックスの作成
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_area_code 
             ON forecasts(area_code)
@@ -67,7 +67,7 @@ class WeatherDatabase:
         conn.close()
     
     def save_area(self, area_code, area_name, center_code=None, center_name=None):
-        """地區情報をDBに保存"""
+        """地域情報をデータベースに保存"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -83,7 +83,7 @@ class WeatherDatabase:
             conn.close()
     
     def save_forecast(self, area_code, publishing_office, weather_list):
-        """天気予報をDBに保存"""
+        """天気予報をデータベースに保存"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -117,7 +117,7 @@ class WeatherDatabase:
             conn.close()
     
     def get_latest_forecast(self, area_code):
-        """最新の天気予報をDBから取得"""
+        """最新の天気予報をデータベースから取得"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -165,7 +165,7 @@ class WeatherDatabase:
             conn.close()
     
     def get_forecast_history(self, area_code):
-        """🆕 過去の予報履歴を取得"""
+        """過去の予報履歴を取得"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -183,7 +183,7 @@ class WeatherDatabase:
             conn.close()
     
     def get_forecast_by_id(self, forecast_id):
-        """🆕 指定されたforecast_idの予報を取得"""
+        """指定されたforecast_idの予報を取得"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -230,7 +230,7 @@ class WeatherDatabase:
 
 
 class WeatherApp(ft.Row):
-    """気象庁APIを使用した天気予報アプリケーション（DB対応版）"""
+    """気象庁APIを使用した天気予報アプリケーション（データベース対応版）"""
     
     VALID_AREA_CODES = {
         "011000", "012000", "013000", "014030", "014100", "015000", "016000", "017000",
@@ -253,7 +253,7 @@ class WeatherApp(ft.Row):
         
         self.area_data = {}
         self.selected_area_code = None
-        self.current_forecast_id = None  # 🆕 記錄當前顯示的 forecast_id
+        self.current_forecast_id = None
         
         self.db = WeatherDatabase()
         
@@ -431,9 +431,9 @@ class WeatherApp(ft.Row):
             self.show_error("地域データの取得に失敗しました")
     
     def show_weather_forecast(self, area_code):
-        """選択された地域の天気予報を表示（DB統合版）"""
+        """選択された地域の天気予報を表示"""
         try:
-            self.selected_area_code = area_code  # 🆕 記錄當前選擇的地區
+            self.selected_area_code = area_code
             
             db_data = self.db.get_latest_forecast(area_code)
             
@@ -442,7 +442,7 @@ class WeatherApp(ft.Row):
                 age = (datetime.now() - fetched_time).total_seconds() / 3600
                 
                 if age < 1:
-                    print(f"📦 DBからデータを取得（{age:.1f}時間前）")
+                    print(f"データベースからデータを取得しました（{age:.1f}時間前）")
                     self.current_forecast_id = db_data["forecast_id"]
                     self.display_weather(
                         db_data["publishing_office"],
@@ -451,7 +451,7 @@ class WeatherApp(ft.Row):
                     )
                     return
             
-            print("🌐 APIからデータを取得")
+            print("気象庁APIからデータを取得しています")
             url = f"https://www.jma.go.jp/bosai/forecast/data/forecast/{area_code}.json"
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -462,7 +462,6 @@ class WeatherApp(ft.Row):
                 self.show_error("天気予報データが見つかりませんでした")
                 return
             
-            # 你原本的數據解析邏輯（保持不變）
             short_term = data[0]
             publishing_office = short_term.get("publishingOffice", "")
             weekly = data[1]
@@ -565,7 +564,7 @@ class WeatherApp(ft.Row):
             
             forecast_id = self.db.save_forecast(area_code, publishing_office, weather_list)
             self.current_forecast_id = forecast_id
-            print("💾 データをDBに保存しました")
+            print("データをデータベースに保存しました")
             
             self.display_weather(publishing_office, weather_list, datetime.now().isoformat())
             
@@ -576,22 +575,23 @@ class WeatherApp(ft.Row):
             self.show_error(f"天気予報の取得に失敗しました\n地域コード: {area_code}")
     
     def display_weather(self, publishing_office, weather_list, fetched_at):
-        """🆕 天気予報を表示（履歴選択機能付き）"""
+        """天気予報を表示"""
         
-        # 🆕 取得歷史記錄列表
         history_dropdown = None
         if self.selected_area_code:
             history = self.db.get_forecast_history(self.selected_area_code)
             
-            if len(history) > 1:  # 只有多於1筆記錄時才顯示下拉選單
+            if len(history) > 1:
                 dropdown_options = []
                 for forecast_id, fetch_time, office in history:
-                    # 格式化時間顯示
                     dt = datetime.fromisoformat(fetch_time)
-                    time_str = dt.strftime("%Y-%m-%d %H:%M")
+                    time_str = dt.strftime("%Y年%m月%d日 %H時%M分")
                     
-                    # 標記當前顯示的記錄
-                    label = f"{'★ ' if forecast_id == self.current_forecast_id else ''}{time_str}"
+                    # 現在表示中の予報に印を付ける
+                    if forecast_id == self.current_forecast_id:
+                        label = f"[現在表示] {time_str}"
+                    else:
+                        label = time_str
                     
                     dropdown_options.append(
                         ft.dropdown.Option(key=str(forecast_id), text=label)
@@ -601,13 +601,12 @@ class WeatherApp(ft.Row):
                     label="過去の予報を選択",
                     options=dropdown_options,
                     value=str(self.current_forecast_id),
-                    width=300,
+                    width=350,
                     on_change=self.on_history_selected,
                     bgcolor=ft.Colors.WHITE,
                     border_color=ft.Colors.INDIGO_200,
                 )
         
-        # 天氣卡片（保持你原本的樣式）
         weather_cards = []
         for item in weather_list:
             date_str = item["date"]
@@ -697,11 +696,9 @@ class WeatherApp(ft.Row):
             )
             weather_cards.append(card)
         
-        # 🆕 格式化取得時間
         fetch_dt = datetime.fromisoformat(fetched_at)
         fetch_time_str = fetch_dt.strftime("%Y年%m月%d日 %H時%M分")
         
-        # 組裝顯示內容
         content_controls = [
             ft.Row(
                 controls=[
@@ -716,14 +713,13 @@ class WeatherApp(ft.Row):
                 spacing=10,
             ),
             ft.Text(
-                f"取得時刻：{fetch_time_str}",
+                f"取得時刻: {fetch_time_str}",
                 size=12,
                 color=ft.Colors.GREY_600,
                 italic=True,
             ),
         ]
         
-        # 🆕 如果有歷史記錄，加入下拉選單
         if history_dropdown:
             content_controls.append(ft.Container(height=10))
             content_controls.append(history_dropdown)
@@ -747,10 +743,9 @@ class WeatherApp(ft.Row):
         self.update()
     
     def on_history_selected(self, e):
-        """🆕 歷史記錄選擇事件處理"""
+        """過去の予報選択時の処理"""
         selected_forecast_id = int(e.control.value)
         
-        # 從 DB 取得指定的預報記錄
         forecast_data = self.db.get_forecast_by_id(selected_forecast_id)
         
         if forecast_data:
@@ -760,7 +755,7 @@ class WeatherApp(ft.Row):
                 forecast_data["weather_list"],
                 forecast_data["fetched_at"]
             )
-            print(f"📜 過去の予報を表示（ID: {selected_forecast_id}）")
+            print(f"過去の予報を表示しました（予報ID: {selected_forecast_id}）")
     
     def show_error(self, message):
         """エラーメッセージを表示"""
@@ -778,7 +773,7 @@ class WeatherApp(ft.Row):
 
 
 def main(page: ft.Page):
-    page.title = "天気予報アプリ（DB版）"
+    page.title = "天気予報アプリ（データベース版）"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.padding = 0
     
