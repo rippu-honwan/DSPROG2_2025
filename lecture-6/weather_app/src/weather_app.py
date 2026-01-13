@@ -1,34 +1,248 @@
 import flet as ft
 import requests
+import sqlite3
 from datetime import datetime
+
+class WeatherDatabase:
+    """SQLite データベース管理クラス"""
+    
+    def __init__(self, db_path="weather_forecast.db"):
+        self.db_path = db_path
+        self.init_database()
+    
+    def init_database(self):
+        """データベーステーブルの作成"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # 1. 地區表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS areas (
+                area_code TEXT PRIMARY KEY,
+                area_name TEXT NOT NULL,
+                center_code TEXT,
+                center_name TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+        
+        # 2. 預報主表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS forecasts (
+                forecast_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                area_code TEXT NOT NULL,
+                publishing_office TEXT,
+                report_datetime TEXT NOT NULL,
+                fetched_at TEXT NOT NULL
+            )
+        """)
+        
+        # 3. 預報詳情表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS forecast_details (
+                detail_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                forecast_id INTEGER NOT NULL,
+                forecast_date TEXT NOT NULL,
+                weather_text TEXT,
+                weather_code TEXT,
+                temp_min TEXT,
+                temp_max TEXT,
+                FOREIGN KEY (forecast_id) REFERENCES forecasts(forecast_id),
+                UNIQUE(forecast_id, forecast_date)
+            )
+        """)
+        
+        # 建立索引
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_area_code 
+            ON forecasts(area_code)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_forecast_date 
+            ON forecast_details(forecast_date)
+        """)
+        
+        conn.commit()
+        conn.close()
+    
+    def save_area(self, area_code, area_name, center_code=None, center_name=None):
+        """地區情報をDBに保存"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                INSERT OR IGNORE INTO areas 
+                (area_code, area_name, center_code, center_name, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (area_code, area_name, center_code, center_name, 
+                  datetime.now().isoformat()))
+            conn.commit()
+        finally:
+            conn.close()
+    
+    def save_forecast(self, area_code, publishing_office, weather_list):
+        """天気予報をDBに保存"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            fetched_at = datetime.now().isoformat()
+            cursor.execute("""
+                INSERT INTO forecasts 
+                (area_code, publishing_office, report_datetime, fetched_at)
+                VALUES (?, ?, ?, ?)
+            """, (area_code, publishing_office, fetched_at, fetched_at))
+            
+            forecast_id = cursor.lastrowid
+            
+            for item in weather_list:
+                cursor.execute("""
+                    INSERT INTO forecast_details
+                    (forecast_id, forecast_date, weather_text, weather_code, temp_min, temp_max)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    forecast_id,
+                    item["date"],
+                    item["weather"],
+                    item.get("weather_code", ""),
+                    item["temp_min"],
+                    item["temp_max"]
+                ))
+            
+            conn.commit()
+            return forecast_id
+        finally:
+            conn.close()
+    
+    def get_latest_forecast(self, area_code):
+        """最新の天気予報をDBから取得"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT forecast_id, publishing_office, fetched_at
+                FROM forecasts
+                WHERE area_code = ?
+                ORDER BY fetched_at DESC
+                LIMIT 1
+            """, (area_code,))
+            
+            result = cursor.fetchone()
+            if not result:
+                return None
+            
+            forecast_id, publishing_office, fetched_at = result
+            
+            cursor.execute("""
+                SELECT forecast_date, weather_text, weather_code, temp_min, temp_max
+                FROM forecast_details
+                WHERE forecast_id = ?
+                ORDER BY forecast_date
+            """, (forecast_id,))
+            
+            details = cursor.fetchall()
+            
+            weather_list = []
+            for row in details:
+                weather_list.append({
+                    "date": row[0],
+                    "weather": row[1],
+                    "weather_code": row[2],
+                    "temp_min": row[3],
+                    "temp_max": row[4]
+                })
+            
+            return {
+                "forecast_id": forecast_id,
+                "publishing_office": publishing_office,
+                "fetched_at": fetched_at,
+                "weather_list": weather_list
+            }
+        finally:
+            conn.close()
+    
+    def get_forecast_history(self, area_code):
+        """🆕 過去の予報履歴を取得"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT forecast_id, fetched_at, publishing_office
+                FROM forecasts
+                WHERE area_code = ?
+                ORDER BY fetched_at DESC
+                LIMIT 10
+            """, (area_code,))
+            
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    
+    def get_forecast_by_id(self, forecast_id):
+        """🆕 指定されたforecast_idの予報を取得"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT publishing_office, fetched_at
+                FROM forecasts
+                WHERE forecast_id = ?
+            """, (forecast_id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                return None
+            
+            publishing_office, fetched_at = result
+            
+            cursor.execute("""
+                SELECT forecast_date, weather_text, weather_code, temp_min, temp_max
+                FROM forecast_details
+                WHERE forecast_id = ?
+                ORDER BY forecast_date
+            """, (forecast_id,))
+            
+            details = cursor.fetchall()
+            
+            weather_list = []
+            for row in details:
+                weather_list.append({
+                    "date": row[0],
+                    "weather": row[1],
+                    "weather_code": row[2],
+                    "temp_min": row[3],
+                    "temp_max": row[4]
+                })
+            
+            return {
+                "forecast_id": forecast_id,
+                "publishing_office": publishing_office,
+                "fetched_at": fetched_at,
+                "weather_list": weather_list
+            }
+        finally:
+            conn.close()
 
 
 class WeatherApp(ft.Row):
-    """気象庁APIを使用した天気予報アプリケーション"""
+    """気象庁APIを使用した天気予報アプリケーション（DB対応版）"""
     
-    # 🔧 氣象廳 API 支持嘅地區代碼白名單
     VALID_AREA_CODES = {
-        # 北海道
         "011000", "012000", "013000", "014030", "014100", "015000", "016000", "017000",
-        # 東北
         "020000", "030000", "040000", "050000", "060000", "070000",
-        # 關東甲信
         "080000", "090000", "100000", "110000", "120000", "130000", "140000", "190000", "200000",
-        # 東海
         "210000", "220000", "230000", "240000",
-        # 北陸
         "150000", "160000", "170000", "180000",
-        # 近畿
         "250000", "260000", "270000", "280000", "290000", "300000",
-        # 中國
         "310000", "320000", "330000", "340000",
-        # 四國
         "360000", "370000", "380000", "390000",
-        # 九州（含山口）
         "350000", "400000", "410000", "420000", "430000", "440000",
-        # 九州南部・奄美
         "450000", "460040", "460100",
-        # 沖繩
         "471000", "472000", "473000", "474000"
     }
     
@@ -39,13 +253,15 @@ class WeatherApp(ft.Row):
         
         self.area_data = {}
         self.selected_area_code = None
+        self.current_forecast_id = None  # 🆕 記錄當前顯示的 forecast_id
+        
+        self.db = WeatherDatabase()
         
         self.init_ui()
     
     def init_ui(self):
         """UIコンポーネントの初期化"""
         
-        # 左側のサイドバー
         self.sidebar = ft.Container(
             content=ft.Column(
                 controls=[
@@ -89,7 +305,6 @@ class WeatherApp(ft.Row):
             bgcolor=ft.Colors.BLUE_GREY_800,
         )
         
-        # 右側のメインコンテンツ
         self.main_content = ft.Container(
             content=ft.Column(
                 controls=[
@@ -126,7 +341,6 @@ class WeatherApp(ft.Row):
             centers = data.get("centers", {})
             offices = data.get("offices", {})
             
-            # サイドバーに地域を追加
             expansion_tiles = []
             self.area_data = {}
             
@@ -136,15 +350,15 @@ class WeatherApp(ft.Row):
                 office_list = []
                 
                 for office_code in office_codes:
-                    # 🔧 只顯示白名單內的地區代碼
                     if office_code in offices and office_code in self.VALID_AREA_CODES:
                         office_name = offices[office_code].get("name", "")
                         office_list.append({
                             "code": office_code,
                             "name": office_name
                         })
+                        
+                        self.db.save_area(office_code, office_name, center_code, center_name)
                 
-                # 如果該 center 沒有有效的 office，跳過
                 if not office_list:
                     continue
                 
@@ -153,7 +367,6 @@ class WeatherApp(ft.Row):
                     "offices": office_list
                 }
                 
-                # 地域リストを作成
                 office_tiles = []
                 for office in office_list:
                     tile = ft.Container(
@@ -181,7 +394,6 @@ class WeatherApp(ft.Row):
                     )
                     office_tiles.append(tile)
                 
-                # ExpansionTile を作成
                 expansion = ft.ExpansionTile(
                     title=ft.Column(
                         controls=[
@@ -210,7 +422,6 @@ class WeatherApp(ft.Row):
                 )
                 expansion_tiles.append(expansion)
             
-            # サイドバーを更新
             sidebar_column = self.sidebar.content.controls[3].content
             sidebar_column.controls = expansion_tiles
             self.update()
@@ -220,8 +431,27 @@ class WeatherApp(ft.Row):
             self.show_error("地域データの取得に失敗しました")
     
     def show_weather_forecast(self, area_code):
-        """選択された地域の天気予報を表示"""
+        """選択された地域の天気予報を表示（DB統合版）"""
         try:
+            self.selected_area_code = area_code  # 🆕 記錄當前選擇的地區
+            
+            db_data = self.db.get_latest_forecast(area_code)
+            
+            if db_data:
+                fetched_time = datetime.fromisoformat(db_data["fetched_at"])
+                age = (datetime.now() - fetched_time).total_seconds() / 3600
+                
+                if age < 1:
+                    print(f"📦 DBからデータを取得（{age:.1f}時間前）")
+                    self.current_forecast_id = db_data["forecast_id"]
+                    self.display_weather(
+                        db_data["publishing_office"],
+                        db_data["weather_list"],
+                        db_data["fetched_at"]
+                    )
+                    return
+            
+            print("🌐 APIからデータを取得")
             url = f"https://www.jma.go.jp/bosai/forecast/data/forecast/{area_code}.json"
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -232,17 +462,14 @@ class WeatherApp(ft.Row):
                 self.show_error("天気予報データが見つかりませんでした")
                 return
             
-            # 📦 第一個物件：短期預報
+            # 你原本的數據解析邏輯（保持不變）
             short_term = data[0]
             publishing_office = short_term.get("publishingOffice", "")
-            
-            # 📦 第二個物件：一週預報
             weekly = data[1]
             
-            # 🔧 從第一個物件取得天氣描述（前3日）
             weather_dict = {}
             if short_term.get("timeSeries"):
-                series = short_term["timeSeries"][0]  # 天氣描述
+                series = short_term["timeSeries"][0]
                 dates = series.get("timeDefines", [])
                 if series.get("areas"):
                     weathers = series["areas"][0].get("weathers", [])
@@ -258,9 +485,8 @@ class WeatherApp(ft.Row):
                             "weather_code": w_code
                         }
             
-            # 🔧 從第一個物件取得前3日的溫度（如果有）
             if short_term.get("timeSeries") and len(short_term["timeSeries"]) > 2:
-                temp_series = short_term["timeSeries"][2]  # 短期溫度
+                temp_series = short_term["timeSeries"][2]
                 dates = temp_series.get("timeDefines", [])
                 if temp_series.get("areas"):
                     area = temp_series["areas"][0]
@@ -271,17 +497,14 @@ class WeatherApp(ft.Row):
                         if date_only not in weather_dict:
                             weather_dict[date_only] = {}
                         
-                        # 判斷是最低溫還是最高溫（根據順序）
                         if i < len(temps) and temps[i] and temps[i].strip():
-                            # 偶數索引為最低溫，奇數索引為最高溫
                             if i % 2 == 0:
                                 weather_dict[date_only]["temp_min"] = temps[i]
                             else:
                                 weather_dict[date_only]["temp_max"] = temps[i]
             
-            # 🔧 從第二個物件取得一週天氣代碼（補充後面日子）
             if weekly.get("timeSeries"):
-                w_series = weekly["timeSeries"][0]  # 一週天氣
+                w_series = weekly["timeSeries"][0]
                 w_dates = w_series.get("timeDefines", [])
                 if w_series.get("areas"):
                     w_area = w_series["areas"][0]
@@ -292,13 +515,11 @@ class WeatherApp(ft.Row):
                         if date_only not in weather_dict:
                             weather_dict[date_only] = {}
                         
-                        # 補充天氣代碼（用於後面日子）
                         if i < len(weather_codes) and weather_codes[i]:
                             weather_dict[date_only]["weather_code"] = weather_codes[i]
             
-            # 🔧 從第二個物件取得一週溫度（補充或覆蓋）
             if weekly.get("timeSeries") and len(weekly["timeSeries"]) > 1:
-                temp_series = weekly["timeSeries"][1]  # 一週溫度
+                temp_series = weekly["timeSeries"][1]
                 dates = temp_series.get("timeDefines", [])
                 if temp_series.get("areas"):
                     area = temp_series["areas"][0]
@@ -310,7 +531,6 @@ class WeatherApp(ft.Row):
                         if date_only not in weather_dict:
                             weather_dict[date_only] = {}
                         
-                        # 🔧 檢查溫度是否為空字串，並且不覆蓋已有的短期溫度
                         if i < len(temps_min) and temps_min[i] and temps_min[i].strip():
                             if "temp_min" not in weather_dict[date_only]:
                                 weather_dict[date_only]["temp_min"] = temps_min[i]
@@ -319,15 +539,12 @@ class WeatherApp(ft.Row):
                             if "temp_max" not in weather_dict[date_only]:
                                 weather_dict[date_only]["temp_max"] = temps_max[i]
             
-            # 轉換為列表並排序
             weather_list = []
             for date_str in sorted(weather_dict.keys())[:7]:
                 item = weather_dict[date_str]
                 
-                # 🔧 天氣描述優先顯示，否則用天氣代碼判斷
                 weather_text = item.get("weather", "")
                 if not weather_text:
-                    # 根據天氣代碼顯示簡化描述
                     w_code = item.get("weather_code", "")
                     if w_code.startswith("1"):
                         weather_text = "晴れ"
@@ -341,136 +558,209 @@ class WeatherApp(ft.Row):
                 weather_list.append({
                     "date": date_str,
                     "weather": weather_text,
+                    "weather_code": item.get("weather_code", ""),
                     "temp_min": item.get("temp_min", ""),
                     "temp_max": item.get("temp_max", "")
                 })
             
-            # 天気予報カードを作成
-            weather_cards = []
-            for item in weather_list:
-                date_str = item["date"]
-                weather = item["weather"]
-                temp_min = item["temp_min"]
-                temp_max = item["temp_max"]
-                
-                # アイコンを選択
-                icon_stack = None
-                if "雨" in weather:
-                    icon_stack = ft.Stack(
-                        controls=[
-                            ft.Icon(ft.Icons.WB_SUNNY, size=60, color=ft.Colors.ORANGE_400),
-                            ft.Container(
-                                content=ft.Icon(ft.Icons.UMBRELLA, size=40, color=ft.Colors.BLUE_400),
-                                left=25, top=20,
-                            ),
-                        ],
-                        width=70, height=70,
-                    )
-                elif "雪" in weather or "ふぶく" in weather:
-                    icon_stack = ft.Icon(ft.Icons.AC_UNIT, size=60, color=ft.Colors.LIGHT_BLUE_200)
-                elif "晴" in weather:
-                    icon_stack = ft.Icon(ft.Icons.WB_SUNNY, size=60, color=ft.Colors.ORANGE_400)
-                elif "曇" in weather or "くもり" in weather:
-                    icon_stack = ft.Icon(ft.Icons.CLOUD, size=60, color=ft.Colors.GREY_400)
-                else:
-                    icon_stack = ft.Icon(ft.Icons.CLOUD, size=60, color=ft.Colors.GREY_400)
-                
-                # 🔧 温度表示（改良）
-                has_min = temp_min and str(temp_min).strip()
-                has_max = temp_max and str(temp_max).strip()
-
-                temp_display = ft.Row(
-                    controls=[
-                        ft.Text(
-                            f"{temp_min}°C" if has_min else "-",
-                            size=16,
-                            color=ft.Colors.BLUE_600 if has_min else ft.Colors.GREY_400,
-                            weight=ft.FontWeight.W_500,
-                        ),
-                        ft.Text("/", size=14, color=ft.Colors.GREY_600),
-                        ft.Text(
-                            f"{temp_max}°C" if has_max else "-",
-                            size=16,
-                            color=ft.Colors.RED_400 if has_max else ft.Colors.GREY_400,
-                            weight=ft.FontWeight.W_500,
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    spacing=5,
-                )
-                
-                card = ft.Container(
-                    content=ft.Column(
-                        controls=[
-                            ft.Text(
-                                date_str,
-                                size=16,
-                                weight=ft.FontWeight.BOLD,
-                                color=ft.Colors.GREY_800,
-                            ),
-                            ft.Container(height=10),
-                            icon_stack,
-                            ft.Container(height=5),
-                            ft.Text(
-                                weather if weather else "データなし",
-                                size=14,
-                                color=ft.Colors.GREY_700 if weather else ft.Colors.GREY_400,
-                                text_align=ft.TextAlign.CENTER,
-                                max_lines=3,
-                            ),
-                            ft.Container(height=10),
-                            temp_display,
-                        ],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=0,
-                    ),
-                    padding=20,
-                    bgcolor=ft.Colors.WHITE,
-                    border_radius=15,
-                    border=ft.border.all(1, ft.Colors.GREY_300),
-                    width=180,
-                    shadow=ft.BoxShadow(
-                        spread_radius=1,
-                        blur_radius=10,
-                        color=ft.Colors.BLACK12,
-                    ),
-                )
-                weather_cards.append(card)
+            forecast_id = self.db.save_forecast(area_code, publishing_office, weather_list)
+            self.current_forecast_id = forecast_id
+            print("💾 データをDBに保存しました")
             
-            # メインコンテンツを更新
-            self.main_content.content = ft.Column(
-                controls=[
-                    ft.Row(
-                        controls=[
-                            ft.Icon(ft.Icons.LOCATION_ON, size=32, color=ft.Colors.INDIGO_600),
-                            ft.Text(
-                                publishing_office,
-                                size=28,
-                                weight=ft.FontWeight.BOLD,
-                                color=ft.Colors.INDIGO_900,
-                            ),
-                        ],
-                        spacing=10,
-                    ),
-                    ft.Container(height=20),
-                    ft.Container(
-                        content=ft.Row(
-                            controls=weather_cards,
-                            spacing=15,
-                            scroll=ft.ScrollMode.AUTO,
-                            wrap=True,
-                        ),
-                    ),
-                ],
-                spacing=0,
-            )
-            self.update()
+            self.display_weather(publishing_office, weather_list, datetime.now().isoformat())
             
         except Exception as e:
             print(f"天気予報の取得に失敗しました: {e}")
             import traceback
             traceback.print_exc()
             self.show_error(f"天気予報の取得に失敗しました\n地域コード: {area_code}")
+    
+    def display_weather(self, publishing_office, weather_list, fetched_at):
+        """🆕 天気予報を表示（履歴選択機能付き）"""
+        
+        # 🆕 取得歷史記錄列表
+        history_dropdown = None
+        if self.selected_area_code:
+            history = self.db.get_forecast_history(self.selected_area_code)
+            
+            if len(history) > 1:  # 只有多於1筆記錄時才顯示下拉選單
+                dropdown_options = []
+                for forecast_id, fetch_time, office in history:
+                    # 格式化時間顯示
+                    dt = datetime.fromisoformat(fetch_time)
+                    time_str = dt.strftime("%Y-%m-%d %H:%M")
+                    
+                    # 標記當前顯示的記錄
+                    label = f"{'★ ' if forecast_id == self.current_forecast_id else ''}{time_str}"
+                    
+                    dropdown_options.append(
+                        ft.dropdown.Option(key=str(forecast_id), text=label)
+                    )
+                
+                history_dropdown = ft.Dropdown(
+                    label="過去の予報を選択",
+                    options=dropdown_options,
+                    value=str(self.current_forecast_id),
+                    width=300,
+                    on_change=self.on_history_selected,
+                    bgcolor=ft.Colors.WHITE,
+                    border_color=ft.Colors.INDIGO_200,
+                )
+        
+        # 天氣卡片（保持你原本的樣式）
+        weather_cards = []
+        for item in weather_list:
+            date_str = item["date"]
+            weather = item["weather"]
+            temp_min = item["temp_min"]
+            temp_max = item["temp_max"]
+            
+            icon_stack = None
+            if "雨" in weather:
+                icon_stack = ft.Stack(
+                    controls=[
+                        ft.Icon(ft.Icons.WB_SUNNY, size=60, color=ft.Colors.ORANGE_400),
+                        ft.Container(
+                            content=ft.Icon(ft.Icons.UMBRELLA, size=40, color=ft.Colors.BLUE_400),
+                            left=25, top=20,
+                        ),
+                    ],
+                    width=70, height=70,
+                )
+            elif "雪" in weather or "ふぶく" in weather:
+                icon_stack = ft.Icon(ft.Icons.AC_UNIT, size=60, color=ft.Colors.LIGHT_BLUE_200)
+            elif "晴" in weather:
+                icon_stack = ft.Icon(ft.Icons.WB_SUNNY, size=60, color=ft.Colors.ORANGE_400)
+            elif "曇" in weather or "くもり" in weather:
+                icon_stack = ft.Icon(ft.Icons.CLOUD, size=60, color=ft.Colors.GREY_400)
+            else:
+                icon_stack = ft.Icon(ft.Icons.CLOUD, size=60, color=ft.Colors.GREY_400)
+            
+            has_min = temp_min and str(temp_min).strip()
+            has_max = temp_max and str(temp_max).strip()
+            
+            temp_display = ft.Row(
+                controls=[
+                    ft.Text(
+                        f"{temp_min}°C" if has_min else "-",
+                        size=16,
+                        color=ft.Colors.BLUE_600 if has_min else ft.Colors.GREY_400,
+                        weight=ft.FontWeight.W_500,
+                    ),
+                    ft.Text("/", size=14, color=ft.Colors.GREY_600),
+                    ft.Text(
+                        f"{temp_max}°C" if has_max else "-",
+                        size=16,
+                        color=ft.Colors.RED_400 if has_max else ft.Colors.GREY_400,
+                        weight=ft.FontWeight.W_500,
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=5,
+            )
+            
+            card = ft.Container(
+                content=ft.Column(
+                    controls=[
+                        ft.Text(
+                            date_str,
+                            size=16,
+                            weight=ft.FontWeight.BOLD,
+                            color=ft.Colors.GREY_800,
+                        ),
+                        ft.Container(height=10),
+                        icon_stack,
+                        ft.Container(height=5),
+                        ft.Text(
+                            weather if weather else "データなし",
+                            size=14,
+                            color=ft.Colors.GREY_700 if weather else ft.Colors.GREY_400,
+                            text_align=ft.TextAlign.CENTER,
+                            max_lines=3,
+                        ),
+                        ft.Container(height=10),
+                        temp_display,
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=0,
+                ),
+                padding=20,
+                bgcolor=ft.Colors.WHITE,
+                border_radius=15,
+                border=ft.border.all(1, ft.Colors.GREY_300),
+                width=180,
+                shadow=ft.BoxShadow(
+                    spread_radius=1,
+                    blur_radius=10,
+                    color=ft.Colors.BLACK12,
+                ),
+            )
+            weather_cards.append(card)
+        
+        # 🆕 格式化取得時間
+        fetch_dt = datetime.fromisoformat(fetched_at)
+        fetch_time_str = fetch_dt.strftime("%Y年%m月%d日 %H時%M分")
+        
+        # 組裝顯示內容
+        content_controls = [
+            ft.Row(
+                controls=[
+                    ft.Icon(ft.Icons.LOCATION_ON, size=32, color=ft.Colors.INDIGO_600),
+                    ft.Text(
+                        publishing_office,
+                        size=28,
+                        weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.INDIGO_900,
+                    ),
+                ],
+                spacing=10,
+            ),
+            ft.Text(
+                f"取得時刻：{fetch_time_str}",
+                size=12,
+                color=ft.Colors.GREY_600,
+                italic=True,
+            ),
+        ]
+        
+        # 🆕 如果有歷史記錄，加入下拉選單
+        if history_dropdown:
+            content_controls.append(ft.Container(height=10))
+            content_controls.append(history_dropdown)
+        
+        content_controls.append(ft.Container(height=20))
+        content_controls.append(
+            ft.Container(
+                content=ft.Row(
+                    controls=weather_cards,
+                    spacing=15,
+                    scroll=ft.ScrollMode.AUTO,
+                    wrap=True,
+                ),
+            )
+        )
+        
+        self.main_content.content = ft.Column(
+            controls=content_controls,
+            spacing=0,
+        )
+        self.update()
+    
+    def on_history_selected(self, e):
+        """🆕 歷史記錄選擇事件處理"""
+        selected_forecast_id = int(e.control.value)
+        
+        # 從 DB 取得指定的預報記錄
+        forecast_data = self.db.get_forecast_by_id(selected_forecast_id)
+        
+        if forecast_data:
+            self.current_forecast_id = selected_forecast_id
+            self.display_weather(
+                forecast_data["publishing_office"],
+                forecast_data["weather_list"],
+                forecast_data["fetched_at"]
+            )
+            print(f"📜 過去の予報を表示（ID: {selected_forecast_id}）")
     
     def show_error(self, message):
         """エラーメッセージを表示"""
@@ -488,7 +778,7 @@ class WeatherApp(ft.Row):
 
 
 def main(page: ft.Page):
-    page.title = "天気予報アプリ"
+    page.title = "天気予報アプリ（DB版）"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.padding = 0
     
